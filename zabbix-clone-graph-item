@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+
+"""
+requirements :
+
+requests ~= 2.13
+"""
+
+import requests
+import argparse
+import json
+import re
+
+url = 'https://<YOUR_ZABBIX_HOST>/api_jsonrpc.php'
+username = '<YOUR_ZABBIX_USERNAME>'
+password = '<YOUR_ZABBIX_PASSWORD>'
+
+
+class sample:
+    graph_id = '<YOUR_GRAPH_ID_TO_CLONE>'
+    item_in_id = '<YOUR_GRAPH_ITEM1_ID_TO_CLONE>'
+    item_out_id = '<YOUR_GRAPH_ITEM2_ID_TO_CLONE>'
+    keyword = '<YOUR_KEYWORD_TO_REPLACE>'
+
+
+class Zabbix:
+    id = 1
+    headers = {
+        'Content-Type': 'application/json-rpc',
+    }
+    token = None
+    version = None
+
+    def __init__(self, username, password):
+        self.version = self.get_version()
+        self.login(username, password)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_details):
+        self.logout()
+
+    def take_result(self, respond):
+        assert respond.ok, 'Response code must be 200'
+        data = respond.json()
+        assert data['id'] == self.id, 'Error communication ID, expected {} got {}'.format(self.id, data['id'])
+        self.id += 1
+        error = data.get('error')
+        assert error is None, 'Error [{}]: {}'.format(error['code'], error['data'])
+        result = data['result']
+        return result
+
+    def get_version(self):
+        r1 = requests.post(url, headers=self.headers, data=json.dumps({
+            'jsonrpc': '2.0',
+            'method': 'apiinfo.version',
+            'id': self.id,
+            'auth': None,
+            'params': {}
+        }))
+        return self.take_result(r1)
+
+    def login(self, username, password):
+        r2 = requests.post(url, headers=self.headers, data=json.dumps({
+            'jsonrpc': '2.0',
+            'method': 'user.login',
+            'params': {
+                'user': username,
+                'password': password
+            },
+            'id': self.id,
+            'auth': None
+        }))
+        self.token = self.take_result(r2)
+
+    def call(self, method, params=[]):
+        r3 = requests.post(url, headers=self.headers, data=json.dumps({
+            'jsonrpc': '2.0',
+            'method': method,
+            'params': params,
+            'id': self.id,
+            'auth': self.token
+        }))
+        return self.take_result(r3)
+
+    def logout(self):
+        self.call('user.logout')
+
+
+def main():
+
+    def valid_name(name):
+        if not re.sub(r'\W', '', name):
+            raise argparse.ArgumentTypeError(name)
+        return name
+
+    parser = argparse.ArgumentParser(description='Nusanet Zabbix, Create graph & items in olt-mayang.cgs')
+    parser.add_argument('name', type=valid_name, help='Name to create')
+    args = parser.parse_args()
+    name = args.name
+
+    with Zabbix(username, password) as zabbix:
+        created_itemid = {
+            int(sample.item_in_id): None,
+            int(sample.item_out_id): None,
+        }
+
+        for item in zabbix.call('item.get', {'filter': {'itemid': [sample.item_in_id, sample.item_out_id]}}):
+            itemid = item['itemid']
+
+            for field in ['key_', 'name', 'snmp_oid']:
+                item[field] = item[field].replace(sample.keyword, name)
+            for field in ['itemid', 'templateid', 'state']:
+                del item[field]
+            result = zabbix.call('item.create', item)
+
+            created_itemid[int(itemid)] = result['itemids'][0]
+
+        for id_from, id_to in created_itemid.items():
+            print('Item ID {} cloned to {}'.format(id_from, id_to))
+
+        graphs = zabbix.call('graph.get', {
+            'filter': {'graphid': sample.graph_id},
+            'selectGraphItems': ['color', 'itemid', 'calc_fnc', 'drawtype', 'sortorder'],
+        })
+
+        for graph in graphs:
+            graph['name'] = name
+            for field in ['graphid', 'templateid', 'flags']:
+                del graph[field]
+
+            for item in graph['gitems']:
+                item['itemid'] = created_itemid[int(item['itemid'])]
+
+            result = zabbix.call('graph.create', graph)
+            for graphid in result['graphids']:
+                print('Graph ID {} cloned to {}'.format(sample.graph_id, graphid))
+
+
+if __name__ == '__main__':
+    main()
