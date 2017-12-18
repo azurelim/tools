@@ -20,6 +20,7 @@ class sample:
     graph_id = '<YOUR_GRAPH_ID_TO_CLONE>'
     item_in_id = '<YOUR_GRAPH_ITEM1_ID_TO_CLONE>'
     item_out_id = '<YOUR_GRAPH_ITEM2_ID_TO_CLONE>'
+    trigger_in_id = '<YOUR_TRIGGER_ID_TO_CLONE>'
     keyword = '<YOUR_KEYWORD_TO_REPLACE>'
 
 
@@ -136,6 +137,22 @@ def main():
             result = zabbix.call('graph.create', graph)
             for graphid in result['graphids']:
                 print('Graph ID {} cloned to {}'.format(sample.graph_id, graphid))
+
+        triggers = zabbix.call('trigger.get', {
+            'filter': {
+                'triggerid': sample.trigger_in_id,
+            },
+            'expandExpression': 1
+        })
+
+        for trigger in triggers:
+            trigger['description'] = trigger['description'].replace(sample.keyword, name)
+            trigger['expression'] = trigger['expression'].replace(sample.keyword, name)
+            for field in ['triggerid', 'value', 'lastchange', 'error', 'templateid', 'state', 'flags']:
+                del trigger[field]
+            result = zabbix.call('trigger.create', trigger)
+            for triggerid in result['triggerids']:
+                print('Trigger ID {} cloned to {}'.format(sample.trigger_in_id, triggerid))
 
 
 if __name__ == '__main__':
